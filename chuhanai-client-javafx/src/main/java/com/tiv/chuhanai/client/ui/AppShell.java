@@ -71,6 +71,8 @@ import javafx.scene.text.Font;
 import javafx.util.Duration;
 
 import java.time.Instant;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -304,7 +306,7 @@ public class AppShell extends StackPane {
 
     private Node buildSystemPanel() {
         systemListView.setItems(store.systemMessages());
-        systemListView.setCellFactory(list -> new MessageCell());
+        systemListView.setCellFactory(list -> new MessageCell(store, false));
         systemListView.setPrefHeight(160);
         return cardBox(new Label("系统消息"), systemListView);
     }
@@ -318,7 +320,7 @@ public class AppShell extends StackPane {
 
     private Node buildChatPanel() {
         chatListView.setItems(store.chatMessages());
-        chatListView.setCellFactory(list -> new MessageCell());
+        chatListView.setCellFactory(list -> new MessageCell(store, true));
         chatListView.setPrefHeight(220);
         chatInput.setPromptText("输入聊天内容，最多 300 字");
         chatInput.setWrapText(true);
@@ -896,7 +898,7 @@ public class AppShell extends StackPane {
 
     private void handleChatBroadcast(ChatBroadcastPayload payload) {
         if (payload != null) {
-            store.addChat(new UiMessage(payload.senderSessionId(), payload.content(), false));
+            store.addChat(UiMessage.chat(payload.senderSessionId(), payload.content(), payload.sentAtMs()));
         }
     }
 
@@ -996,7 +998,7 @@ public class AppShell extends StackPane {
             handlePendingControl(payload.pendingControlEvent(), payload.pendingControlEvent().controlType());
         }
         List<UiMessage> recentChats = payload.recentChats() == null ? List.of() : payload.recentChats().stream()
-                .map(chat -> new UiMessage(chat.senderSessionId(), chat.content(), false))
+                .map(chat -> UiMessage.chat(chat.senderSessionId(), chat.content(), chat.sentAtMs()))
                 .toList();
         store.replaceChats(recentChats);
         if (restoring) {
@@ -1145,16 +1147,41 @@ public class AppShell extends StackPane {
     }
 
     private static final class MessageCell extends ListCell<UiMessage> {
+        private final ClientStore store;
+        private final boolean forChat;
+
+        MessageCell(ClientStore store, boolean forChat) {
+            this.store = store;
+            this.forChat = forChat;
+        }
+
         @Override
         protected void updateItem(UiMessage item, boolean empty) {
             super.updateItem(item, empty);
             if (empty || item == null) {
                 setText(null);
                 setGraphic(null);
+                setStyle("");
                 return;
             }
-            setText(item.system() ? "[系统] " + item.content() : "[" + item.sender() + "] " + item.content());
+            if (item.system()) {
+                setText(item.content());
+                setStyle("-fx-text-fill:#555;-fx-font-style:italic;");
+            } else {
+                String identity = forChat && item.sender() != null && item.sender().equals(store.sessionIdProperty().get())
+                        ? "我" : "对手";
+                String timePart = item.sentAtMs() != null
+                        ? formatChatTime(item.sentAtMs()) + " "
+                        : "";
+                setText("[" + identity + "] " + timePart + item.content());
+                setStyle("-fx-text-fill:#222;");
+            }
         }
+    }
+
+    private static String formatChatTime(long epochMs) {
+        LocalTime time = Instant.ofEpochMilli(epochMs).atZone(ZoneId.systemDefault()).toLocalTime();
+        return String.format("%02d:%02d", time.getHour(), time.getMinute());
     }
 
     private static final class MoveSummaryCell extends ListCell<MoveSummary> {

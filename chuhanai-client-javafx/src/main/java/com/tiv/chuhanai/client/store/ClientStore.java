@@ -311,10 +311,15 @@ public class ClientStore {
     public record UiMessage(
             String sender,
             String content,
-            boolean system
+            boolean system,
+            Long sentAtMs
     ) {
         public static UiMessage system(String content) {
-            return new UiMessage("SYSTEM", content, true);
+            return new UiMessage("SYSTEM", content, true, null);
+        }
+
+        public static UiMessage chat(String senderSessionId, String content, Long sentAtMs) {
+            return new UiMessage(senderSessionId, content, false, sentAtMs);
         }
     }
 
