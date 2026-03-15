@@ -161,6 +161,16 @@ class PersistenceService {
                 """, new MoveRecordMapper(), roomId, limit).reversed();
     }
 
+    List<ChatRecordView> loadRecentChats(String roomId, int limit) {
+        return jdbcTemplate.query("""
+                select sender_session_id, content, created_at
+                from chat_message
+                where room_id = ?
+                order by created_at desc
+                limit ?
+                """, new ChatRecordMapper(), roomId, limit).reversed();
+    }
+
     private String writeJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
@@ -181,6 +191,17 @@ class PersistenceService {
                     rs.getString("from_pos"),
                     rs.getString("to_pos"),
                     rs.getString("piece"),
+                    rs.getTimestamp("created_at").getTime()
+            );
+        }
+    }
+
+    private static final class ChatRecordMapper implements RowMapper<ChatRecordView> {
+        @Override
+        public ChatRecordView mapRow(ResultSet rs, int rowNum) throws SQLException {
+            return new ChatRecordView(
+                    rs.getString("sender_session_id"),
+                    rs.getString("content"),
                     rs.getTimestamp("created_at").getTime()
             );
         }

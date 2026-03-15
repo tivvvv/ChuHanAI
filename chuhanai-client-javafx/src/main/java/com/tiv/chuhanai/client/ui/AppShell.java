@@ -6,6 +6,7 @@ import com.tiv.chuhanai.client.net.ClientJson;
 import com.tiv.chuhanai.client.net.ClientProtocol.ChatBroadcastPayload;
 import com.tiv.chuhanai.client.net.ClientProtocol.ChatSendPayload;
 import com.tiv.chuhanai.client.net.ClientProtocol.ControlDecisionPayload;
+import com.tiv.chuhanai.client.net.ClientProtocol.ControlResultPayload;
 import com.tiv.chuhanai.client.net.ClientProtocol.ControlType;
 import com.tiv.chuhanai.client.net.ClientProtocol.FinishReason;
 import com.tiv.chuhanai.client.net.ClientProtocol.GameOverPayload;
@@ -70,6 +71,7 @@ import javafx.util.Duration;
 
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -442,6 +444,7 @@ public class AppShell extends StackPane {
             webSocketService.send(type, store.roomId(), Map.of());
             store.pendingControlProperty().set(new PendingControlState(controlType, store.sessionIdProperty().get(),
                     Instant.now().plusSeconds(15).toEpochMilli(), false));
+            store.addSystem("已发起" + controlTypeLabel(controlType) + "请求，等待对手响应");
         } catch (Exception e) {
             store.actionLockedProperty().set(false);
             store.showNotice("发送控制请求失败: " + rootMessage(e));
@@ -473,6 +476,7 @@ public class AppShell extends StackPane {
         try {
             MessageType type = pending.controlType() == ControlType.UNDO ? MessageType.UNDO_RESPONSE : MessageType.DRAW_RESPONSE;
             webSocketService.send(type, store.roomId(), new ControlDecisionPayload(accept ? "ACCEPT" : "REJECT"));
+            store.addSystem((accept ? "已同意" : "已拒绝") + "对手的" + controlTypeLabel(pending.controlType()) + "请求");
             store.pendingControlProperty().set(null);
             store.actionLockedProperty().set(false);
         } catch (Exception e) {
@@ -762,12 +766,9 @@ public class AppShell extends StackPane {
             case CHAT_BROADCAST -> handleChatBroadcast(payload(envelope, ChatBroadcastPayload.class));
             case UNDO_PENDING -> handlePendingControl(payload(envelope, PendingControlPayload.class), ControlType.UNDO);
             case DRAW_PENDING -> handlePendingControl(payload(envelope, PendingControlPayload.class), ControlType.DRAW);
+            case DRAW_RESPONSE -> handleDrawResponse(payload(envelope, ControlResultPayload.class));
             case UNDO_APPLIED -> handleUndoApplied(payload(envelope, UndoAppliedPayload.class));
-            case UNDO_REJECTED, DRAW_REJECTED -> {
-                store.pendingControlProperty().set(null);
-                store.actionLockedProperty().set(false);
-                store.showNotice("对方拒绝了请求");
-            }
+            case UNDO_REJECTED, DRAW_REJECTED -> handleControlRejected(envelope, payload(envelope, ControlResultPayload.class));
             case SNAPSHOT_SYNCED -> handleSnapshot(payload(envelope, SnapshotPayload.class));
             case GAME_OVER -> handleGameOver(payload(envelope, GameOverPayload.class));
             case PONG -> store.connectionStatusProperty().set("已连接");
@@ -780,6 +781,8 @@ public class AppShell extends StackPane {
         String message = envelope.error() == null ? "服务端返回失败" : envelope.error().message();
         if (envelope.type() == MessageType.MOVE_REJECTED) {
             handleMoveRejected(envelope, payload(envelope, MoveRejectedPayload.class));
+        } else if (envelope.type() == MessageType.UNDO_REJECTED || envelope.type() == MessageType.DRAW_REJECTED) {
+            handleControlRejected(envelope, payload(envelope, ControlResultPayload.class));
         } else if (envelope.type() == MessageType.SNAPSHOT_SYNCED) {
             sessionStore.clearRoomContext();
             store.clearRoom();
@@ -854,8 +857,46 @@ public class AppShell extends StackPane {
         ControlType type = payload != null && payload.controlType() != null ? payload.controlType() : fallbackType;
         String from = payload == null ? null : payload.fromSessionId();
         long expireAtMs = payload == null || payload.expireAtMs() == null ? Instant.now().plusSeconds(15).toEpochMilli() : payload.expireAtMs();
-        store.pendingControlProperty().set(new PendingControlState(type, from, expireAtMs, true));
+        boolean incoming = from != null && !from.equals(store.sessionIdProperty().get());
+        store.pendingControlProperty().set(new PendingControlState(type, from, expireAtMs, incoming));
         store.actionLockedProperty().set(false);
+        store.addSystem(incoming
+                ? "对手发起了" + controlTypeLabel(type) + "请求"
+                : "你的" + controlTypeLabel(type) + "请求已送达，等待对手响应");
+    }
+
+    private void handleDrawResponse(ControlResultPayload payload) {
+        store.pendingControlProperty().set(null);
+        store.actionLockedProperty().set(false);
+        if (payload != null && "ACCEPT".equalsIgnoreCase(payload.decision())) {
+            store.addSystem("对局双方已同意求和");
+        }
+    }
+
+    private void handleControlRejected(ServerEnvelope envelope, ControlResultPayload payload) {
+        PendingControlState pending = store.pendingControlProperty().get();
+        ControlType type = envelope.type() == MessageType.UNDO_REJECTED ? ControlType.UNDO : ControlType.DRAW;
+        boolean outgoing = pending != null && pending.controlType() == type && !pending.incoming();
+        boolean incoming = pending != null && pending.controlType() == type && pending.incoming();
+        store.pendingControlProperty().set(null);
+        store.actionLockedProperty().set(false);
+
+        String label = controlTypeLabel(type);
+        String decision = payload == null || payload.decision() == null ? "" : payload.decision().toUpperCase();
+        String message;
+        if (Boolean.FALSE.equals(envelope.success()) && envelope.error() != null && envelope.error().message() != null) {
+            message = envelope.error().message();
+        } else if ("TIMEOUT".equals(decision)) {
+            message = outgoing ? "对手未及时响应你的" + label + "请求" : label + "请求已超时，系统按拒绝处理";
+        } else if (outgoing) {
+            message = "对方拒绝了你的" + label + "请求";
+        } else if (incoming) {
+            message = "你已拒绝对手的" + label + "请求";
+        } else {
+            message = label + "请求未通过";
+        }
+        store.addSystem(message);
+        store.showNotice(message);
     }
 
     private void handleUndoApplied(UndoAppliedPayload payload) {
@@ -865,6 +906,7 @@ public class AppShell extends StackPane {
         clearSelection();
         store.pendingControlProperty().set(null);
         store.actionLockedProperty().set(false);
+        store.addSystem("悔棋已生效，棋局已回退到上一步");
         store.updateBoard(payload.boardFen(), payload.currentTurn(),
                 payload.moveNo() == null ? Math.max(store.moveNo() - 1, 0) : payload.moveNo(),
                 payload.redTimeLeftMs() == null ? store.redTimeLeftMsProperty().get() : payload.redTimeLeftMs(),
@@ -887,9 +929,14 @@ public class AppShell extends StackPane {
                 payload.room().moveNo() == null ? store.moveNo() : payload.room().moveNo(),
                 payload.room().redTimeLeftMs() == null ? store.redTimeLeftMsProperty().get() : payload.room().redTimeLeftMs(),
                 payload.room().blackTimeLeftMs() == null ? store.blackTimeLeftMsProperty().get() : payload.room().blackTimeLeftMs());
+        store.pendingControlProperty().set(null);
         if (payload.pendingControlEvent() != null) {
             handlePendingControl(payload.pendingControlEvent(), payload.pendingControlEvent().controlType());
         }
+        List<UiMessage> recentChats = payload.recentChats() == null ? List.of() : payload.recentChats().stream()
+                .map(chat -> new UiMessage(chat.senderSessionId(), chat.content(), false))
+                .toList();
+        store.replaceChats(recentChats);
         if (payload.room().status() == RoomStatus.FINISHED) {
             store.resultVisibleProperty().set(true);
             sessionStore.clearRoomContext();
@@ -917,6 +964,10 @@ public class AppShell extends StackPane {
         store.pendingControlProperty().set(null);
         store.actionLockedProperty().set(false);
         sessionStore.clearRoomContext();
+    }
+
+    private String controlTypeLabel(ControlType controlType) {
+        return controlType == ControlType.UNDO ? "悔棋" : "求和";
     }
 
     private final class WsListener implements GameWebSocketService.Listener {

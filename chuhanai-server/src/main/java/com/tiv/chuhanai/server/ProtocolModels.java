@@ -196,6 +196,11 @@ record ControlDecisionPayload(
 ) {
 }
 
+record ControlResultPayload(
+        String decision
+) {
+}
+
 record PendingControlPayload(
         ControlType controlType,
         String fromSessionId,
@@ -248,7 +253,8 @@ record SnapshotMovePayload(
 record SnapshotPayload(
         SnapshotRoomPayload room,
         List<SnapshotMovePayload> recentMoves,
-        PendingControlPayload pendingControlEvent
+        PendingControlPayload pendingControlEvent,
+        List<ChatBroadcastPayload> recentChats
 ) {
 }
 
@@ -280,6 +286,13 @@ record MoveRecordView(
         String fromPos,
         String toPos,
         String piece,
+        long createdAtMs
+) {
+}
+
+record ChatRecordView(
+        String senderSessionId,
+        String content,
         long createdAtMs
 ) {
 }

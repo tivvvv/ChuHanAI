@@ -192,6 +192,12 @@ public final class ClientProtocol {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ControlResultPayload(
+            String decision
+    ) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record PendingControlPayload(
             ControlType controlType,
             String fromSessionId,
@@ -218,7 +224,8 @@ public final class ClientProtocol {
     public record SnapshotPayload(
             SnapshotRoomPayload room,
             List<SnapshotMovePayload> recentMoves,
-            PendingControlPayload pendingControlEvent
+            PendingControlPayload pendingControlEvent,
+            List<ChatBroadcastPayload> recentChats
     ) {
     }
 

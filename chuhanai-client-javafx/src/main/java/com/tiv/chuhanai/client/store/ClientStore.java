@@ -17,6 +17,8 @@ import javafx.beans.property.StringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 
+import java.util.List;
+
 public class ClientStore {
     private final ObjectProperty<Screen> screen = new SimpleObjectProperty<>(Screen.STARTUP);
     private final StringProperty startupStatus = new SimpleStringProperty("正在初始化客户端");
@@ -231,6 +233,10 @@ public class ClientStore {
 
     public void addChat(UiMessage message) {
         chatMessages.add(message);
+    }
+
+    public void replaceChats(List<UiMessage> messages) {
+        chatMessages.setAll(messages);
     }
 
     public void addSystem(String content) {

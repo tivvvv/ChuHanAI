@@ -281,12 +281,19 @@ class GameCoordinator {
 
     private void handleControlResponse(String sessionId, InboundMessage message, ControlType controlType) {
         RoomRuntime room = requireRoom(message.roomId(), sessionId);
+        PersistenceScope scope = new PersistenceScope("ROOM", room.roomId, sessionId, message.msgId(), message.type());
+        if (replayIfNeeded(scope, sessionId)) {
+            return;
+        }
         ControlDecisionPayload payload = convert(message.payload(), ControlDecisionPayload.class);
         synchronized (room) {
             ensurePlaying(room);
             if (room.pendingControl == null || room.pendingControl.type() != controlType || !Objects.equals(room.pendingControl.targetSessionId(), sessionId)) {
-                send(sessionId, OutboundMessage.failure(controlType == ControlType.UNDO ? MessageType.UNDO_REJECTED : MessageType.DRAW_REJECTED,
-                        room.roomId, message.msgId(), "CONTROL_CONFLICT", "不存在待处理控制请求", false, null));
+                MessageType rejectedType = controlType == ControlType.UNDO ? MessageType.UNDO_REJECTED : MessageType.DRAW_REJECTED;
+                OutboundMessage reply = OutboundMessage.failure(rejectedType, room.roomId, message.msgId(),
+                        "CONTROL_CONFLICT", "不存在待处理控制请求", false, null);
+                persistenceService.saveIdempotent(scope.bizScope(), scope.roomId(), scope.sessionId(), scope.msgId(), scope.msgType(), false, reply);
+                send(sessionId, reply);
                 return;
             }
             cancelControlTimeout(room.roomId);
@@ -299,19 +306,25 @@ class GameCoordinator {
 
             if (!accept) {
                 MessageType rejectedType = controlType == ControlType.UNDO ? MessageType.UNDO_REJECTED : MessageType.DRAW_REJECTED;
-                OutboundMessage rejected = OutboundMessage.success(rejectedType, room.roomId, message.msgId(), Map.of("decision", "REJECT"));
+                OutboundMessage rejected = OutboundMessage.success(rejectedType, room.roomId, message.msgId(), new ControlResultPayload("REJECT"));
+                persistenceService.saveIdempotent(scope.bizScope(), scope.roomId(), scope.sessionId(), scope.msgId(), scope.msgType(), true, rejected);
                 send(sessionId, rejected);
                 send(current.initiatorSessionId(), rejected);
                 return;
             }
             if (controlType == ControlType.DRAW) {
-                send(sessionId, OutboundMessage.success(MessageType.DRAW_RESPONSE, room.roomId, message.msgId(), Map.of("decision", "ACCEPT")));
+                OutboundMessage reply = OutboundMessage.success(MessageType.DRAW_RESPONSE, room.roomId, message.msgId(), new ControlResultPayload("ACCEPT"));
+                persistenceService.saveIdempotent(scope.bizScope(), scope.roomId(), scope.sessionId(), scope.msgId(), scope.msgType(), true, reply);
+                send(sessionId, reply);
+                send(current.initiatorSessionId(), reply);
                 finishGame(room, null, FinishReason.DRAW_AGREED);
                 return;
             }
             if (room.undoSnapshot == null) {
-                send(sessionId, OutboundMessage.failure(MessageType.UNDO_REJECTED, room.roomId, message.msgId(),
-                        "SYSTEM_ERROR", "缺少悔棋快照", false, null));
+                OutboundMessage reply = OutboundMessage.failure(MessageType.UNDO_REJECTED, room.roomId, message.msgId(),
+                        "SYSTEM_ERROR", "缺少悔棋快照", false, null);
+                persistenceService.saveIdempotent(scope.bizScope(), scope.roomId(), scope.sessionId(), scope.msgId(), scope.msgType(), false, reply);
+                send(sessionId, reply);
                 return;
             }
             room.board = xiangqiEngine.fromFen(room.undoSnapshot.boardFen());
@@ -323,11 +336,14 @@ class GameCoordinator {
             if (!room.moveHistory.isEmpty()) {
                 room.moveHistory.remove(room.moveHistory.size() - 1);
             }
+            room.undoSnapshot = null;
             persistenceService.saveRoom(room);
             scheduleTurnTimeout(room);
             UndoAppliedPayload undoPayload = new UndoAppliedPayload(room.moveNo, room.board.toFen(room.currentTurn),
                     room.currentTurn, room.redTimeLeftMs, room.blackTimeLeftMs);
-            broadcastRoom(room, OutboundMessage.success(MessageType.UNDO_APPLIED, room.roomId, message.msgId(), undoPayload));
+            OutboundMessage reply = OutboundMessage.success(MessageType.UNDO_APPLIED, room.roomId, message.msgId(), undoPayload);
+            persistenceService.saveIdempotent(scope.bizScope(), scope.roomId(), scope.sessionId(), scope.msgId(), scope.msgType(), true, reply);
+            broadcastRoom(room, reply);
         }
     }
 
@@ -394,11 +410,15 @@ class GameCoordinator {
                     .skip(Math.max(0, room.moveHistory.size() - 20L))
                     .map(move -> new SnapshotMovePayload(move.moveNo(), move.from(), move.to(), move.piece(), move.createdAtMs()))
                     .toList();
+            List<ChatBroadcastPayload> recentChats = persistenceService.loadRecentChats(room.roomId, 20).stream()
+                    .map(chat -> new ChatBroadcastPayload(IdGenerator.chatMessageId(), chat.senderSessionId(), chat.content(), chat.createdAtMs()))
+                    .toList();
             SnapshotPayload payload = new SnapshotPayload(
                     new SnapshotRoomPayload(room.roomId, room.status, room.currentTurn, room.board.toFen(room.currentTurn),
                             room.moveNo, room.redTimeLeftMs, room.blackTimeLeftMs),
                     recentMoves,
-                    pendingPayload
+                    pendingPayload,
+                    recentChats
             );
             send(sessionId, OutboundMessage.success(MessageType.SNAPSHOT_SYNCED, room.roomId, message.msgId(), payload));
         }
@@ -553,7 +573,10 @@ class GameCoordinator {
                 }
                 room.pendingControl = null;
                 MessageType rejectedType = event.type() == ControlType.UNDO ? MessageType.UNDO_REJECTED : MessageType.DRAW_REJECTED;
-                OutboundMessage timeoutMessage = OutboundMessage.success(rejectedType, room.roomId, event.msgId(), Map.of("decision", "TIMEOUT"));
+                persistenceService.saveControlEvent(room.roomId,
+                        event.type() == ControlType.UNDO ? "UNDO_RESP" : "DRAW_RESP",
+                        event.targetSessionId(), event.initiatorSessionId(), "TIMEOUT", event.msgId(), room.moveNo, Map.of());
+                OutboundMessage timeoutMessage = OutboundMessage.success(rejectedType, room.roomId, event.msgId(), new ControlResultPayload("TIMEOUT"));
                 send(event.initiatorSessionId(), timeoutMessage);
                 send(event.targetSessionId(), timeoutMessage);
             }
