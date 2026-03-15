@@ -27,6 +27,7 @@ import com.tiv.chuhanai.client.net.ClientProtocol.UndoAppliedPayload;
 import com.tiv.chuhanai.client.net.GameWebSocketService;
 import com.tiv.chuhanai.client.net.HealthApiClient;
 import com.tiv.chuhanai.client.store.ClientStore;
+import com.tiv.chuhanai.client.store.ClientStore.MoveSummary;
 import com.tiv.chuhanai.client.store.ClientStore.PendingControlState;
 import com.tiv.chuhanai.client.store.ClientStore.Screen;
 import com.tiv.chuhanai.client.store.ClientStore.UiMessage;
@@ -113,6 +114,7 @@ public class AppShell extends StackPane {
     private final Label resultSummaryLabel = new Label();
     private final TextArea chatInput = new TextArea();
     private final ListView<UiMessage> chatListView = new ListView<>();
+    private final ListView<MoveSummary> moveHistoryListView = new ListView<>();
     private final ListView<UiMessage> systemListView = new ListView<>();
     private final VBox pendingControlBox = new VBox(8);
 
@@ -254,7 +256,7 @@ public class AppShell extends StackPane {
         layout.setPadding(new Insets(8));
         layout.setLeft(new VBox(12, buildStatusHeader(), buildBoardPane()));
         layout.setCenter(new Region());
-        VBox right = new VBox(12, buildSystemPanel(), buildChatPanel(), buildControlPanel());
+        VBox right = new VBox(12, buildMoveHistoryPanel(), buildSystemPanel(), buildChatPanel(), buildControlPanel());
         right.setPrefWidth(420);
         layout.setRight(right);
         BorderPane.setMargin(right, new Insets(0, 0, 0, 16));
@@ -301,14 +303,21 @@ public class AppShell extends StackPane {
     private Node buildSystemPanel() {
         systemListView.setItems(store.systemMessages());
         systemListView.setCellFactory(list -> new MessageCell());
-        systemListView.setPrefHeight(190);
+        systemListView.setPrefHeight(160);
         return cardBox(new Label("系统消息"), systemListView);
+    }
+
+    private Node buildMoveHistoryPanel() {
+        moveHistoryListView.setItems(store.moveSummaries());
+        moveHistoryListView.setCellFactory(list -> new MoveSummaryCell());
+        moveHistoryListView.setPrefHeight(170);
+        return cardBox(new Label("最近走子"), moveHistoryListView);
     }
 
     private Node buildChatPanel() {
         chatListView.setItems(store.chatMessages());
         chatListView.setCellFactory(list -> new MessageCell());
-        chatListView.setPrefHeight(280);
+        chatListView.setPrefHeight(220);
         chatInput.setPromptText("输入聊天内容，最多 300 字");
         chatInput.setWrapText(true);
         chatInput.setPrefRowCount(3);
@@ -391,6 +400,8 @@ public class AppShell extends StackPane {
 
         store.boardFenProperty().addListener((obs, oldValue, newValue) -> renderBoard());
         store.mySideProperty().addListener((obs, oldValue, newValue) -> renderBoard());
+        store.lastMoveFromProperty().addListener((obs, oldValue, newValue) -> renderBoard());
+        store.lastMoveToProperty().addListener((obs, oldValue, newValue) -> renderBoard());
         store.pendingControlProperty().addListener((obs, oldValue, newValue) -> refreshPendingControlBox());
         store.currentTurnProperty().addListener((obs, oldValue, newValue) -> refreshStatusHeader());
         store.roomIdProperty().addListener((obs, oldValue, newValue) -> refreshStatusHeader());
@@ -562,16 +573,19 @@ public class AppShell extends StackPane {
                 Position logical = logicalPosition(displayRow, displayCol);
                 boolean selected = logical.equals(selectedPosition);
                 boolean highlighted = highlightedTargets.contains(logical);
-                String background = selected ? "#c0d8ff" : highlighted ? "#dff5d6" : "#f4c98b";
+                boolean recentFrom = logical.toString().equals(store.lastMoveFromProperty().get());
+                boolean recentTo = logical.toString().equals(store.lastMoveToProperty().get());
+                String background = selected ? "#c0d8ff"
+                        : recentTo ? "#f8e7a3"
+                        : recentFrom ? "#f2f0c8"
+                        : highlighted ? "#dff5d6"
+                        : "#f4c98b";
                 cell.setBackground(new Background(new BackgroundFill(Color.web(background), new CornerRadii(10), Insets.EMPTY)));
                 if (board == null) {
                     continue;
                 }
                 Piece piece = board.get(logical);
                 if (piece == null) {
-                    Label coord = new Label(logical.toString());
-                    coord.setTextFill(Color.web("#8b6f47"));
-                    cell.getChildren().add(coord);
                     continue;
                 }
                 Circle pieceCircle = new Circle(24, Color.web(piece.side() == Side.RED ? "#fff5f5" : "#f4f4f4"));
@@ -804,11 +818,14 @@ public class AppShell extends StackPane {
         store.matchingProperty().set(false);
         clearSelection();
         int baseTime = payload.baseTimeMs() == null ? 600_000 : payload.baseTimeMs();
+        int increment = payload.incrementMs() == null ? 15_000 : payload.incrementMs();
         Side initialTurn = payload.initialFen() != null && payload.initialFen().endsWith(" b") ? Side.BLACK : Side.RED;
         store.enterRoom(payload.roomId(), payload.mySide(), payload.opponentSessionId(), payload.initialFen(),
                 initialTurn, 0, baseTime, baseTime);
         saveSessionSnapshot();
-        store.addSystem("匹配成功，已进入房间 " + payload.roomId());
+        store.addSystem("匹配成功，已进入房间 " + payload.roomId() + "，你当前执"
+                + (payload.mySide() == Side.RED ? "红" : "黑")
+                + "，用时 " + formatMs(baseTime) + "，步增 " + (increment / 1000) + " 秒");
     }
 
     private void handleMoveAccepted(MoveAcceptedPayload payload) {
@@ -816,11 +833,23 @@ public class AppShell extends StackPane {
             return;
         }
         clearSelection();
+        Side mover = payload.nextTurn() == null ? store.currentTurn() : payload.nextTurn().opposite();
         store.updateBoard(payload.boardFenAfter(), payload.nextTurn(),
                 payload.moveNo() == null ? store.moveNo() + 1 : payload.moveNo(),
                 payload.redTimeLeftMs() == null ? store.redTimeLeftMsProperty().get() : payload.redTimeLeftMs(),
                 payload.blackTimeLeftMs() == null ? store.blackTimeLeftMsProperty().get() : payload.blackTimeLeftMs());
+        MoveSummary summary = new MoveSummary(
+                payload.moveNo() == null ? store.moveNo() : payload.moveNo(),
+                mover,
+                payload.piece(),
+                payload.from(),
+                payload.to(),
+                payload.capturedPiece(),
+                Instant.now().toEpochMilli()
+        );
+        store.addMoveSummary(summary);
         store.actionLockedProperty().set(false);
+        store.addSystem(formatMoveSummary(summary));
         saveSessionSnapshot();
     }
 
@@ -911,6 +940,7 @@ public class AppShell extends StackPane {
                 payload.moveNo() == null ? Math.max(store.moveNo() - 1, 0) : payload.moveNo(),
                 payload.redTimeLeftMs() == null ? store.redTimeLeftMsProperty().get() : payload.redTimeLeftMs(),
                 payload.blackTimeLeftMs() == null ? store.blackTimeLeftMsProperty().get() : payload.blackTimeLeftMs());
+        store.rollbackLastMoveSummary();
         saveSessionSnapshot();
     }
 
@@ -929,6 +959,18 @@ public class AppShell extends StackPane {
                 payload.room().moveNo() == null ? store.moveNo() : payload.room().moveNo(),
                 payload.room().redTimeLeftMs() == null ? store.redTimeLeftMsProperty().get() : payload.room().redTimeLeftMs(),
                 payload.room().blackTimeLeftMs() == null ? store.blackTimeLeftMsProperty().get() : payload.room().blackTimeLeftMs());
+        List<MoveSummary> recentMoves = payload.recentMoves() == null ? List.of() : payload.recentMoves().stream()
+                .map(move -> new MoveSummary(
+                        move.moveNo() == null ? 0 : move.moveNo(),
+                        inferMover(move.moveNo() == null ? 0 : move.moveNo()),
+                        move.piece(),
+                        move.from(),
+                        move.to(),
+                        null,
+                        move.createdAtMs() == null ? 0L : move.createdAtMs()
+                ))
+                .toList();
+        store.replaceMoveSummaries(recentMoves);
         store.pendingControlProperty().set(null);
         if (payload.pendingControlEvent() != null) {
             handlePendingControl(payload.pendingControlEvent(), payload.pendingControlEvent().controlType());
@@ -968,6 +1010,18 @@ public class AppShell extends StackPane {
 
     private String controlTypeLabel(ControlType controlType) {
         return controlType == ControlType.UNDO ? "悔棋" : "求和";
+    }
+
+    private String formatMoveSummary(MoveSummary summary) {
+        String side = summary.mover() == Side.RED ? "红方" : "黑方";
+        String capture = summary.capturedPiece() == null || summary.capturedPiece().isBlank()
+                ? ""
+                : "，吃掉 " + summary.capturedPiece();
+        return "第 " + summary.moveNo() + " 手 " + side + " " + summary.from() + " -> " + summary.to() + capture;
+    }
+
+    private Side inferMover(int moveNo) {
+        return moveNo % 2 == 1 ? Side.RED : Side.BLACK;
     }
 
     private final class WsListener implements GameWebSocketService.Listener {
@@ -1031,6 +1085,21 @@ public class AppShell extends StackPane {
                 return;
             }
             setText(item.system() ? "[系统] " + item.content() : "[" + item.sender() + "] " + item.content());
+        }
+    }
+
+    private static final class MoveSummaryCell extends ListCell<MoveSummary> {
+        @Override
+        protected void updateItem(MoveSummary item, boolean empty) {
+            super.updateItem(item, empty);
+            if (empty || item == null) {
+                setText(null);
+                setGraphic(null);
+                return;
+            }
+            String mover = item.mover() == Side.RED ? "红" : "黑";
+            String capture = item.capturedPiece() == null || item.capturedPiece().isBlank() ? "" : " 吃 " + item.capturedPiece();
+            setText(item.moveNo() + ". " + mover + " " + item.from() + " -> " + item.to() + capture);
         }
     }
 }

@@ -39,10 +39,13 @@ public class ClientStore {
     private final IntegerProperty moveNo = new SimpleIntegerProperty(0);
     private final IntegerProperty redTimeLeftMs = new SimpleIntegerProperty(0);
     private final IntegerProperty blackTimeLeftMs = new SimpleIntegerProperty(0);
+    private final StringProperty lastMoveFrom = new SimpleStringProperty();
+    private final StringProperty lastMoveTo = new SimpleStringProperty();
     private final ObjectProperty<PendingControlState> pendingControl = new SimpleObjectProperty<>();
     private final ObjectProperty<FinishReason> finishReason = new SimpleObjectProperty<>();
     private final ObjectProperty<Side> winnerSide = new SimpleObjectProperty<>();
     private final BooleanProperty resultVisible = new SimpleBooleanProperty(false);
+    private final ObservableList<MoveSummary> moveSummaries = FXCollections.observableArrayList();
     private final ObservableList<UiMessage> chatMessages = FXCollections.observableArrayList();
     private final ObservableList<UiMessage> systemMessages = FXCollections.observableArrayList();
 
@@ -122,6 +125,14 @@ public class ClientStore {
         return blackTimeLeftMs;
     }
 
+    public StringProperty lastMoveFromProperty() {
+        return lastMoveFrom;
+    }
+
+    public StringProperty lastMoveToProperty() {
+        return lastMoveTo;
+    }
+
     public ObjectProperty<PendingControlState> pendingControlProperty() {
         return pendingControl;
     }
@@ -140,6 +151,10 @@ public class ClientStore {
 
     public ObservableList<UiMessage> chatMessages() {
         return chatMessages;
+    }
+
+    public ObservableList<MoveSummary> moveSummaries() {
+        return moveSummaries;
     }
 
     public ObservableList<UiMessage> systemMessages() {
@@ -179,6 +194,9 @@ public class ClientStore {
         this.winnerSide.set(null);
         this.pendingControl.set(null);
         this.chatMessages.clear();
+        this.moveSummaries.clear();
+        this.lastMoveFrom.set(null);
+        this.lastMoveTo.set(null);
         this.systemMessages.clear();
         showScreen(Screen.GAME);
     }
@@ -207,6 +225,9 @@ public class ClientStore {
         resultVisible.set(false);
         finishReason.set(null);
         winnerSide.set(null);
+        lastMoveFrom.set(null);
+        lastMoveTo.set(null);
+        moveSummaries.clear();
         chatMessages.clear();
         systemMessages.clear();
     }
@@ -237,6 +258,35 @@ public class ClientStore {
 
     public void replaceChats(List<UiMessage> messages) {
         chatMessages.setAll(messages);
+    }
+
+    public void replaceMoveSummaries(List<MoveSummary> summaries) {
+        moveSummaries.setAll(summaries);
+        updateLastMoveMarkerFromHistory();
+    }
+
+    public void addMoveSummary(MoveSummary summary) {
+        moveSummaries.add(summary);
+        lastMoveFrom.set(summary.from());
+        lastMoveTo.set(summary.to());
+    }
+
+    public void rollbackLastMoveSummary() {
+        if (!moveSummaries.isEmpty()) {
+            moveSummaries.remove(moveSummaries.size() - 1);
+        }
+        updateLastMoveMarkerFromHistory();
+    }
+
+    private void updateLastMoveMarkerFromHistory() {
+        if (moveSummaries.isEmpty()) {
+            lastMoveFrom.set(null);
+            lastMoveTo.set(null);
+            return;
+        }
+        MoveSummary latest = moveSummaries.get(moveSummaries.size() - 1);
+        lastMoveFrom.set(latest.from());
+        lastMoveTo.set(latest.to());
     }
 
     public void addSystem(String content) {
@@ -273,6 +323,17 @@ public class ClientStore {
             String fromSessionId,
             long expireAtMs,
             boolean incoming
+    ) {
+    }
+
+    public record MoveSummary(
+            int moveNo,
+            Side mover,
+            String piece,
+            String from,
+            String to,
+            String capturedPiece,
+            long createdAtMs
     ) {
     }
 }
