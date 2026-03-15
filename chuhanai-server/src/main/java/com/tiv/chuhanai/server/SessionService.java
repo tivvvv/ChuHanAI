@@ -28,6 +28,7 @@ class SessionService {
         AuthenticatedSession authenticatedSession;
         if (payload.sessionId() == null || payload.resumeToken() == null) {
             SessionState created = new SessionState(IdGenerator.sessionId(), IdGenerator.resumeToken(), payload.clientVersion());
+            created.lastClientSeq.set(0);
             sessions.put(created.sessionId, created);
             authenticatedSession = new AuthenticatedSession(created.sessionId, created.resumeToken, created.clientVersion, false);
         } else {
@@ -36,6 +37,9 @@ class SessionService {
                 throw new IllegalArgumentException("会话无效");
             }
             existed.clientVersion = payload.clientVersion();
+            // Reconnected clients rebuild their local socket state, so allow client-side sequence
+            // numbers to restart from the new connection instead of inheriting the old channel state.
+            existed.lastClientSeq.set(0);
             authenticatedSession = new AuthenticatedSession(existed.sessionId, existed.resumeToken, existed.clientVersion, true);
         }
 

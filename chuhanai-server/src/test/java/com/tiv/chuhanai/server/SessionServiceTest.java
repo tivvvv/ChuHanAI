@@ -51,4 +51,24 @@ class SessionServiceTest {
 
         assertEquals("会话无效", exception.getMessage());
     }
+
+    @Test
+    void shouldResetClientSequenceAfterReconnect() {
+        SessionService sessionService = new SessionService();
+        EmbeddedChannel firstChannel = new EmbeddedChannel();
+
+        AuthenticatedSession created = sessionService.connect(
+                new ConnectPayload(ProtocolModels.PROTOCOL_VERSION, "test-client", null, null),
+                firstChannel
+        );
+        assertTrue(sessionService.acceptSeq(created.sessionId(), 5));
+
+        EmbeddedChannel resumedChannel = new EmbeddedChannel();
+        sessionService.connect(
+                new ConnectPayload(ProtocolModels.PROTOCOL_VERSION, "test-client", created.sessionId(), created.resumeToken()),
+                resumedChannel
+        );
+
+        assertTrue(sessionService.acceptSeq(created.sessionId(), 1));
+    }
 }
