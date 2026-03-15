@@ -359,14 +359,17 @@ public class AppShell extends StackPane {
     }
 
     private void buildReconnectOverlay() {
-        Label title = new Label("正在重连");
+        Label title = new Label("网络连接中断");
         title.setFont(Font.font(24));
         reconnectStatusLabel.setStyle("-fx-font-size:15;");
         reconnectStatusLabel.setWrapText(true);
-        reconnectCountdownLabel.setStyle("-fx-font-size:16;");
-        VBox card = cardBox(title, reconnectStatusLabel, reconnectCountdownLabel);
+        reconnectCountdownLabel.setStyle("-fx-font-size:16;-fx-font-weight:bold;");
+        Label hintLabel = new Label("请在 30 秒内恢复连接，否则本局将结束");
+        hintLabel.setStyle("-fx-font-size:13;-fx-text-fill:#666;");
+        hintLabel.setWrapText(true);
+        VBox card = cardBox(title, reconnectStatusLabel, reconnectCountdownLabel, hintLabel);
         card.setAlignment(Pos.CENTER);
-        card.setMaxWidth(320);
+        card.setMaxWidth(340);
         reconnectOverlay.getChildren().add(card);
         reconnectOverlay.setBackground(new Background(new BackgroundFill(Color.rgb(0, 0, 0, 0.25), CornerRadii.EMPTY, Insets.EMPTY)));
     }
@@ -655,9 +658,9 @@ public class AppShell extends StackPane {
         reconnectGeneration++;
         int generation = reconnectGeneration;
         long deadline = Instant.now().plusSeconds(30).toEpochMilli();
-        reconnectStatusLabel.setText("连接中断，正在恢复当前对局");
-        store.addSystem("网络连接中断，正在尝试恢复当前对局");
-        store.setReconnecting(deadline, "连接中断，正在尝试恢复");
+        reconnectStatusLabel.setText("正在尝试恢复连接…");
+        store.addSystem("[断线] 网络连接中断，正在尝试恢复当前对局（30 秒内有效）");
+        store.setReconnecting(deadline, "连接中断，正在恢复");
         scheduleReconnectAttempt(generation, deadline, 200, 1);
     }
 
@@ -669,9 +672,9 @@ public class AppShell extends StackPane {
             if (Instant.now().toEpochMilli() >= deadline) {
                 Platform.runLater(() -> {
                     store.reconnectingProperty().set(false);
-                    reconnectStatusLabel.setText("恢复失败，已超出重连窗口");
-                    store.showNotice("超出 30 秒重连窗口，本局已结束");
-                    store.addSystem("未能在 30 秒内恢复对局，本局按重连超时结束");
+                    reconnectStatusLabel.setText("恢复失败：超时未恢复");
+                    store.showNotice("恢复失败：30 秒内未能恢复连接，本局已结束");
+                    store.addSystem("[恢复失败] 超时未恢复，本局已结束");
                     store.resultVisibleProperty().set(true);
                     store.finishReasonProperty().set(FinishReason.RECONNECT_TIMEOUT);
                     sessionStore.clearRoomContext();
@@ -680,9 +683,9 @@ public class AppShell extends StackPane {
                 return;
             }
             currentStoredSession = sessionStore.load();
-            Platform.runLater(() -> reconnectStatusLabel.setText("正在进行第 " + attempt + " 次重连尝试"));
+            Platform.runLater(() -> reconnectStatusLabel.setText("第 " + attempt + " 次尝试中…"));
             webSocketService.connect(currentStoredSession, new WsListener()).exceptionally(throwable -> {
-                Platform.runLater(() -> reconnectStatusLabel.setText("重连失败，" + Math.min(delayMs * 2, 2000) / 1000.0 + " 秒后继续尝试"));
+                Platform.runLater(() -> reconnectStatusLabel.setText("第 " + attempt + " 次失败，" + (int) (Math.min(delayMs * 2, 2000) / 1000.0) + " 秒后重试"));
                 scheduleReconnectAttempt(generation, deadline, Math.min(delayMs * 2, 2000), attempt + 1);
                 return null;
             });
@@ -810,12 +813,13 @@ public class AppShell extends StackPane {
             handleControlRejected(envelope, payload(envelope, ControlResultPayload.class));
         } else if (envelope.type() == MessageType.SNAPSHOT_SYNCED) {
             awaitingSnapshotRestore = false;
-            reconnectStatusLabel.setText("恢复失败，正在返回大厅");
+            store.reconnectingProperty().set(false);
+            reconnectStatusLabel.setText("恢复失败：房间状态异常");
             sessionStore.clearRoomContext();
             store.clearRoom();
             store.showScreen(Screen.LOBBY);
-            store.showNotice("房间快照恢复失败，已返回大厅: " + message);
-            store.addSystem("房间状态恢复失败，已返回大厅");
+            store.showNotice("恢复失败：房间状态恢复失败，已返回大厅");
+            store.addSystem("[恢复失败] 房间状态恢复失败: " + message + "，已返回大厅");
         } else {
             store.showNotice(message);
         }
@@ -996,8 +1000,11 @@ public class AppShell extends StackPane {
                 .toList();
         store.replaceChats(recentChats);
         if (restoring) {
-            reconnectStatusLabel.setText("恢复成功，已同步当前局面");
-            store.addSystem(buildRestoreSummary(payload, recentMoves));
+            store.reconnectingProperty().set(false);
+            store.setConnected(true, "已连接");
+            String restoreSummary = buildRestoreSummary(payload, recentMoves);
+            store.addSystem("[恢复成功] " + restoreSummary);
+            store.showNotice("恢复成功：已同步当前局面");
         }
         if (payload.room().status() == RoomStatus.FINISHED) {
             store.resultVisibleProperty().set(true);
@@ -1060,19 +1067,19 @@ public class AppShell extends StackPane {
     }
 
     private String buildRestoreSummary(SnapshotPayload payload, List<MoveSummary> recentMoves) {
-        StringBuilder summary = new StringBuilder("对局已恢复：房间 ")
+        StringBuilder summary = new StringBuilder("房间 ")
                 .append(payload.room().roomId())
-                .append("，当前步数 ")
+                .append("，步数 ")
                 .append(payload.room().moveNo() == null ? 0 : payload.room().moveNo());
         if (!recentMoves.isEmpty()) {
             MoveSummary last = recentMoves.get(recentMoves.size() - 1);
-            summary.append("，最近一步为 ")
+            summary.append("，最近一步 ")
                     .append(last.from())
                     .append(" -> ")
                     .append(last.to());
         }
         if (payload.pendingControlEvent() != null) {
-            summary.append("，存在待处理的")
+            summary.append("，有待处理的")
                     .append(controlTypeLabel(payload.pendingControlEvent().controlType()))
                     .append("请求");
         }
@@ -1095,9 +1102,9 @@ public class AppShell extends StackPane {
                     store.mySideProperty().set(persistedSide);
                     store.reconnectingProperty().set(true);
                     store.reconnectDeadlineMsProperty().set(Instant.now().plusSeconds(30).toEpochMilli());
-                    store.connectionStatusProperty().set("连接恢复成功，正在同步局面");
-                    reconnectStatusLabel.setText("连接已恢复，正在同步房间状态");
-                    store.addSystem("连接已恢复，正在同步当前房间局面");
+                    store.connectionStatusProperty().set("连接已恢复，正在同步局面");
+                    reconnectStatusLabel.setText("连接已恢复，正在同步房间状态…");
+                    store.addSystem("[重连] 连接已恢复，正在同步房间状态");
                     try {
                         int lastKnownMoveNo = Math.max(store.moveNo(), currentStoredSession.map(StoredSession::lastKnownMoveNo).orElse(0));
                         webSocketService.send(MessageType.SNAPSHOT_SYNC, roomId, new SnapshotSyncPayload(lastKnownMoveNo));
