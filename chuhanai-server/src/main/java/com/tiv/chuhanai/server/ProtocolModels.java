@@ -246,6 +246,7 @@ record SnapshotMovePayload(
         String from,
         String to,
         String piece,
+        String capturedPiece,
         long createdAtMs
 ) {
 }

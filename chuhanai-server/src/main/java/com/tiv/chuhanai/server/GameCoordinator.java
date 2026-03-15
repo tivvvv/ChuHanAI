@@ -408,7 +408,7 @@ class GameCoordinator {
                     new PendingControlPayload(room.pendingControl.type(), room.pendingControl.initiatorSessionId(), room.pendingControl.expireAtMs());
             List<SnapshotMovePayload> recentMoves = room.moveHistory.stream()
                     .skip(Math.max(0, room.moveHistory.size() - 20L))
-                    .map(move -> new SnapshotMovePayload(move.moveNo(), move.from(), move.to(), move.piece(), move.createdAtMs()))
+                    .map(move -> new SnapshotMovePayload(move.moveNo(), move.from(), move.to(), move.piece(), move.capturedPiece(), move.createdAtMs()))
                     .toList();
             List<ChatBroadcastPayload> recentChats = persistenceService.loadRecentChats(room.roomId, 20).stream()
                     .map(chat -> new ChatBroadcastPayload(IdGenerator.chatMessageId(), chat.senderSessionId(), chat.content(), chat.createdAtMs()))

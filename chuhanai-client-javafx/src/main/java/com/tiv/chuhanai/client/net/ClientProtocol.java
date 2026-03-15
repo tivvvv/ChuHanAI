@@ -247,6 +247,7 @@ public final class ClientProtocol {
             String from,
             String to,
             String piece,
+            String capturedPiece,
             Long createdAtMs
     ) {
     }
