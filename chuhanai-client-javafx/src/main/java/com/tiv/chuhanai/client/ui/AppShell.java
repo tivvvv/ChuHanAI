@@ -48,6 +48,7 @@ import javafx.scene.Node;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.Tooltip;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.TextArea;
@@ -221,15 +222,16 @@ public class AppShell extends StackPane {
         title.setFont(Font.font(28));
 
         Label sessionLabel = new Label();
-        sessionLabel.textProperty().bind(Bindings.concat("匿名会话: ")
-                .concat(Bindings.when(Bindings.isEmpty(store.sessionIdProperty())).then("未分配").otherwise(store.sessionIdProperty())));
+        sessionLabel.textProperty().bind(Bindings.concat("会话: ")
+                .concat(Bindings.when(Bindings.isEmpty(store.sessionIdProperty())).then("—").otherwise(store.sessionIdProperty())));
 
         Label connectionLabel = new Label();
-        connectionLabel.textProperty().bind(Bindings.concat("连接状态: ").concat(store.connectionStatusProperty()));
+        connectionLabel.textProperty().bind(Bindings.concat("网络: ").concat(store.connectionStatusProperty()));
 
         Button matchButton = new Button("开始匹配");
         matchButton.setPrefWidth(180);
         matchButton.disableProperty().bind(store.connectedProperty().not().or(store.matchingProperty()));
+        matchButton.setTooltip(new Tooltip("连接后即可开始匹配"));
         matchButton.setOnAction(event -> startMatching());
 
         Button reconnectButton = new Button("重新连接");
@@ -245,8 +247,8 @@ public class AppShell extends StackPane {
         Label title = new Label("正在匹配对手");
         title.setFont(Font.font(28));
 
-        matchingElapsedLabel.setStyle("-fx-font-size:18;");
-        Label hint = new Label("匹配成功后会自动进入对局页");
+        matchingElapsedLabel.setStyle("-fx-font-size:18;-fx-font-weight:bold;");
+        Label hint = new Label("匹配成功后将自动进入对局");
         Button cancelButton = new Button("取消匹配");
         cancelButton.setOnAction(event -> cancelMatching());
 
@@ -272,11 +274,12 @@ public class AppShell extends StackPane {
     }
 
     private Node buildStatusHeader() {
-        connectionBannerLabel.textProperty().bind(Bindings.concat("网络状态: ").concat(store.connectionStatusProperty()));
-        roomInfoLabel.setStyle("-fx-font-size:16;");
-        turnInfoLabel.setStyle("-fx-font-size:16;");
-        redClockLabel.setStyle("-fx-font-size:16;-fx-text-fill:#b22222;");
-        blackClockLabel.setStyle("-fx-font-size:16;-fx-text-fill:#222;");
+        connectionBannerLabel.textProperty().bind(Bindings.concat("网络: ").concat(store.connectionStatusProperty()));
+        connectionBannerLabel.setStyle("-fx-font-size:14;-fx-text-fill:#555;");
+        roomInfoLabel.setStyle("-fx-font-size:15;-fx-font-weight:bold;");
+        turnInfoLabel.setStyle("-fx-font-size:15;");
+        redClockLabel.setStyle("-fx-font-size:15;-fx-text-fill:#b22222;");
+        blackClockLabel.setStyle("-fx-font-size:15;-fx-text-fill:#222;");
         return cardBox(connectionBannerLabel, roomInfoLabel, turnInfoLabel, redClockLabel, blackClockLabel);
     }
 
@@ -328,6 +331,7 @@ public class AppShell extends StackPane {
 
         Button sendButton = new Button("发送");
         sendButton.disableProperty().bind(store.connectedProperty().not().or(store.roomIdProperty().isEmpty()));
+        sendButton.setTooltip(new Tooltip("发送聊天消息"));
         sendButton.setOnAction(event -> sendChat());
 
         VBox panel = cardBox(new Label("聊天"), chatListView, chatInput, sendButton);
@@ -353,6 +357,9 @@ public class AppShell extends StackPane {
         undoButton.setOnAction(event -> sendControlRequest(ControlType.UNDO));
         drawButton.setOnAction(event -> sendControlRequest(ControlType.DRAW));
         resignButton.setOnAction(event -> confirmResign());
+        undoButton.setTooltip(new Tooltip("请求悔棋，需对手同意"));
+        drawButton.setTooltip(new Tooltip("请求和棋，需对手同意"));
+        resignButton.setTooltip(new Tooltip("立即认输结束对局"));
 
         pendingControlBox.setPadding(new Insets(8));
         pendingControlBox.setBackground(new Background(new BackgroundFill(Color.web("#eef3f8"), new CornerRadii(8), Insets.EMPTY)));
@@ -642,7 +649,7 @@ public class AppShell extends StackPane {
         FinishReason reason = store.finishReasonProperty().get();
         Side winner = store.winnerSideProperty().get();
         if (reason == null) {
-            resultSummaryLabel.setText("等待对局结束信息");
+            resultSummaryLabel.setText("加载结果中…");
             return;
         }
         String reasonText = switch (reason) {
@@ -653,7 +660,7 @@ public class AppShell extends StackPane {
             case RECONNECT_TIMEOUT -> "重连超时";
         };
         String winnerText = winner == null ? "无胜方" : (winner == Side.RED ? "红方获胜" : "黑方获胜");
-        resultSummaryLabel.setText(winnerText + "\n结束原因: " + reasonText + "\n最终步数: " + store.moveNoProperty().get());
+        resultSummaryLabel.setText(winnerText + "\n" + reasonText + " · 共 " + store.moveNoProperty().get() + " 步");
     }
 
     private void beginReconnectLoop() {
